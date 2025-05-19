@@ -1,0 +1,157 @@
+name: Build Ren'Py iOS App
+
+on: push
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Cache repository checkout
+        id: cache-checkout
+        uses: actions/cache@v3
+        with:
+          path: |
+            .git
+            .
+          key: checkout-${{ github.sha }}-${{ runner.os }}
+          restore-keys: |
+            checkout-
+
+      - name: Cache Ren'Py SDK
+        id: cache-renpy
+        uses: actions/cache@v3
+        with:
+          path: renpy
+          key: renpy-8.3.7-${{ runner.os }}
+          restore-keys: |
+            renpy-8.3.7-
+
+      - name: Download Ren'Py SDK
+        if: steps.cache-renpy.outputs.cache-hit != 'true'
+        run: |
+          curl -o renpy-sdk.zip https://www.renpy.org/dl/8.3.7/renpy-8.3.7-sdk.zip
+          unzip renpy-sdk.zip -d renpy
+
+      - name: Download and install rapt
+        if: steps.cache-renpy.outputs.cache-hit != 'true'
+        run: |
+          curl -o rapt.zip https://www.renpy.org/dl/8.3.7/renpy-8.3.7-rapt.zip
+          unzip rapt.zip -d renpy/renpy-8.3.7-sdk
+
+      - name: Download and install renios
+        if: steps.cache-renpy.outputs.cache-hit != 'true'
+        run: |
+          curl -o renios.zip https://www.renpy.org/dl/8.3.7/renpy-8.3.7-renios.zip
+          unzip renios.zip -d renpy/renpy-8.3.7-sdk
+
+      - name: Download and install renpyweb
+        if: steps.cache-renpy.outputs.cache-hit != 'true'
+        run: |
+          curl -o renpyweb.zip https://www.renpy.org/dl/8.3.7/renpy-8.3.7-web.zip
+          unzip renpyweb.zip -d renpy/renpy-8.3.7-sdk
+
+      - name: Build for iOS
+        run: |
+          cd renpy/renpy-8.3.7-sdk
+          ./renpy.sh launcher ios_create "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/ios"
+          ./renpy.sh launcher ios_populate "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/ios"
+          echo "Contents of $GITHUB_WORKSPACE/ios:"
+          ls -la "$GITHUB_WORKSPACE/ios"
+
+      - name: Check if iOS directory exists
+        run: |
+          if [ ! -d "$GITHUB_WORKSPACE/ios" ]; then
+            echo "Error: iOS directory not found at $GITHUB_WORKSPACE/ios"
+            exit 1
+          fi
+
+      - name: Find Xcode project
+        run: |
+          XCODEPROJ=$(find "$GITHUB_WORKSPACE/ios" -maxdepth 1 -name "*.xcodeproj" | head -n 1)
+          if [ -z "$XCODEPROJ" ]; then
+            echo "Error: No .xcodeproj file found in $GITHUB_WORKSPACE/ios"
+            exit 1
+          fi
+          XCODEPROJ_NAME=$(basename "$XCODEPROJ")
+          SCHEME_NAME="${XCODEPROJ_NAME%.xcodeproj}"
+          echo "XCODEPROJ_PATH=$XCODEPROJ" >> $GITHUB_ENV
+          echo "SCHEME_NAME=$SCHEME_NAME" >> $GITHUB_ENV
+          echo "Found Xcode project: $XCODEPROJ_NAME with scheme: $SCHEME_NAME"
+
+      - name: Build Xcode project without signing
+        run: |
+          cd "$GITHUB_WORKSPACE/ios"
+          xcodebuild -project "${{ env.XCODEPROJ_PATH }}" -scheme "${{ env.SCHEME_NAME }}" -configuration Release -sdk iphoneos CODE_SIGN_IDENTITY="" PROVISIONING_PROFILE="" | tee build.log
+          if [ $? -ne 0 ]; then
+            echo "Build failed. Check build.log for details."
+            cat build.log
+            exit 1
+          fi
+
+      - name: Debug build settings and locate .app bundle
+        run: |
+          cd "$GITHUB_WORKSPACE/ios"
+          BUILD_SETTINGS=$(xcodebuild -project "${{ env.XCODEPROJ_PATH }}" -scheme "${{ env.SCHEME_NAME }}" -configuration Release -sdk iphoneos -showBuildSettings)
+          echo "$BUILD_SETTINGS"
+          BUILT_PRODUCTS_DIR=$(echo "$BUILD_SETTINGS" | grep -E '^\s*BUILT_PRODUCTS_DIR' | cut -d '=' -f2 | xargs)
+          FULL_PRODUCT_NAME=$(echo "$BUILD_SETTINGS" | grep -E '^\s*FULL_PRODUCT_NAME' | cut -d '=' -f2 | xargs)
+          PRODUCT_NAME=$(echo "$BUILD_SETTINGS" | grep -E '^\s*PRODUCT_NAME' | cut -d '=' -f2 | xargs)
+          VERSION=$(echo "$BUILD_SETTINGS" | grep -E '^\s*MARKETING_VERSION' | cut -d '=' -f2 | xargs)
+          BUNDLE_ID=$(echo "$BUILD_SETTINGS" | grep -E '^\s*PRODUCT_BUNDLE_IDENTIFIER' | cut -d '=' -f2 | xargs)
+          APP_PATH="$BUILT_PRODUCTS_DIR/$FULL_PRODUCT_NAME"
+          echo "APP_PATH=$APP_PATH" >> $GITHUB_ENV
+          echo "PRODUCT_NAME=$PRODUCT_NAME" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "BUNDLE_ID=$BUNDLE_ID" >> $GITHUB_ENV
+          if [ -z "$PRODUCT_NAME" ]; then
+            echo "Error: PRODUCT_NAME not found in build settings"
+            exit 1
+          fi
+          if [ -z "$VERSION" ]; then
+            echo "Warning: MARKETING_VERSION not found, defaulting to 'unknown'"
+            echo "VERSION=unknown" >> $GITHUB_ENV
+          fi
+          if [ -z "$BUNDLE_ID" ]; then
+            echo "Warning: PRODUCT_BUNDLE_IDENTIFIER not found"
+          else
+            echo "Bundle ID: $BUNDLE_ID"
+          fi
+          if [ -d "$APP_PATH" ]; then
+            echo ".app bundle found at $APP_PATH"
+          else
+            echo "Error: .app bundle not found at $APP_PATH"
+            ls -la "$BUILT_PRODUCTS_DIR" || echo "Directory not found"
+            exit 1
+          fi
+
+      - name: Create IPA from unsigned app bundle
+        run: |
+          IPA_NAME="${PRODUCT_NAME}-${VERSION}.ipa"
+          mkdir -p "$GITHUB_WORKSPACE/temp/Payload"
+          cp -R "$APP_PATH" "$GITHUB_WORKSPACE/temp/Payload/"
+          cd "$GITHUB_WORKSPACE/temp"
+          zip -r "$IPA_NAME" Payload/
+          echo "IPA_PATH=$GITHUB_WORKSPACE/temp/$IPA_NAME" >> $GITHUB_ENV
+          echo "Created IPA: $IPA_NAME"
+
+      - name: Install Dropbox SDK
+        run: pip install dropbox
+
+      - name: Upload IPA to Dropbox and Get Shareable Link
+        env:
+          DROPBOX_ACCESS_TOKEN: ${{ secrets.DROPBOX_ACCESS_TOKEN }}
+        run: |
+          SHAREABLE_LINK=$(python upload_to_dropbox.py)
+          echo "SHAREABLE_LINK=$SHAREABLE_LINK" >> $GITHUB_ENV
+
+      - name: Create GitHub Release with Download Link
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITEATOKEN }}
+          GH_TOKEN: ${{ secrets.GITEATOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ env.PRODUCT_NAME }} ${{ env.VERSION }}" \
+            --notes "Automated release\nVersion: ${{ env.VERSION }}\nBundle ID: ${{ env.BUNDLE_ID }}\nDownload IPA from Dropbox: ${{ env.SHAREABLE_LINK }}"
