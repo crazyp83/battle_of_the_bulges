@@ -7,7 +7,7 @@ dbx = dropbox.Dropbox(access_token)
 
 # File paths
 local_file_path = os.getenv('IPA_PATH')
-dropbox_file_path = '/Apocalypse.ipa'
+dropbox_file_path = '/BattleoftheBulges.ipa'
 
 # Chunk size for large file uploads (4 MB)
 chunk_size = 4 * 1024 * 1024

@@ -64,6 +64,7 @@ jobs:
           echo "Contents of project directory:"
           ls -la "$PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
+          # Note: head -n 1 picks the first 'game' directory found, which may not be the intended project if multiple exist.
 
       - name: Build for iOS
         run: |
@@ -95,24 +96,30 @@ jobs:
           fi
           echo "iOS directory exists"
 
-      - name: Find Xcode project
+      - name: Find Xcode project and scheme
         run: |
           XCODEPROJ=$(find "$GITHUB_WORKSPACE/ios" -maxdepth 1 -name "*.xcodeproj" | head -n 1)
           if [ -z "$XCODEPROJ" ]; then
             echo "Error: No .xcodeproj file found in $GITHUB_WORKSPACE/ios"
-            ls -la "$GITHUB_WORKSPACE/ios"
             exit 1
           fi
-          XCODEPROJ_NAME=$(basename "$XCODEPROJ")
-          SCHEME_NAME="${XCODEPROJ_NAME%.xcodeproj}"
           echo "XCODEPROJ_PATH=$XCODEPROJ" >> $GITHUB_ENV
+          SCHEMES=$(xcodebuild -list -project "$XCODEPROJ" | awk '/Schemes:/{flag=1; next} flag && /^ /{print}' | sed 's/^[ \t]*//')
+          if [ -z "$SCHEMES" ]; then
+            echo "Error: No schemes found in the project"
+            exit 1
+          fi
+          SCHEME_NAME=$(echo "$SCHEMES" | head -n 1)
           echo "SCHEME_NAME=$SCHEME_NAME" >> $GITHUB_ENV
-          echo "Found Xcode project: $XCODEPROJ_NAME with scheme: $SCHEME_NAME"
+          echo "Found Xcode project: $(basename "$XCODEPROJ") with scheme: $SCHEME_NAME"
+          echo "Available schemes:"
+          echo "$SCHEMES"
+        # Note: Closing 'fi' for the XCODEPROJ check is included above.
 
       - name: Build Xcode project without signing
         run: |
           cd "$GITHUB_WORKSPACE/ios"
-          xcodebuild -project "${{ env.XCODEPROJ_PATH }}" -scheme "${{ env.SCHEME_NAME }}" -configuration Release -sdk iphoneos CODE_SIGN_IDENTITY="" PROVISIONING_PROFILE="" | tee build.log
+          xcodebuild -project "$XCODEPROJ_PATH" -scheme "$SCHEME_NAME" -configuration Release -sdk iphoneos CODE_SIGN_IDENTITY="" PROVISIONING_PROFILE="" | tee build.log
           if [ $? -ne 0 ]; then
             echo "Build failed. Check build.log for details:"
             cat build.log
@@ -123,7 +130,7 @@ jobs:
       - name: Debug build settings and locate .app bundle
         run: |
           cd "$GITHUB_WORKSPACE/ios"
-          BUILD_SETTINGS=$(xcodebuild -project "${{ env.XCODEPROJ_PATH }}" -scheme "${{ env.SCHEME_NAME }}" -configuration Release -sdk iphoneos -showBuildSettings)
+          BUILD_SETTINGS=$(xcodebuild -project "$XCODEPROJ_PATH" -scheme "$SCHEME_NAME" -configuration Release -sdk iphoneos -showBuildSettings)
           echo "$BUILD_SETTINGS"
           BUILT_PRODUCTS_DIR=$(echo "$BUILD_SETTINGS" | grep -E '^\s*BUILT_PRODUCTS_DIR' | cut -d '=' -f2 | xargs)
           FULL_PRODUCT_NAME=$(echo "$BUILD_SETTINGS" | grep -E '^\s*FULL_PRODUCT_NAME' | cut -d '=' -f2 | xargs)
@@ -166,6 +173,14 @@ jobs:
           echo "IPA_PATH=$GITHUB_WORKSPACE/temp/$IPA_NAME" >> $GITHUB_ENV
           echo "Created IPA: $IPA_NAME"
 
+      - name: Check for upload_to_dropbox.py script
+        run: |
+          if [ ! -f "upload_to_dropbox.py" ]; then
+            echo "Error: upload_to_dropbox.py script not found in repository root"
+            exit 1
+          fi
+          echo "upload_to_dropbox.py script found"
+
       - name: Install Dropbox SDK
         run: pip install dropbox
 
@@ -174,6 +189,10 @@ jobs:
           DROPBOX_ACCESS_TOKEN: ${{ secrets.DROPBOX_ACCESS_TOKEN }}
         run: |
           SHAREABLE_LINK=$(python upload_to_dropbox.py)
+          if [ -z "$SHAREABLE_LINK" ]; then
+            echo "Error: Failed to get a shareable link from upload_to_dropbox.py"
+            exit 1
+          fi
           echo "SHAREABLE_LINK=$SHAREABLE_LINK" >> $GITHUB_ENV
 
       - name: Create GitHub Release with Download Link
@@ -181,6 +200,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITEATOKEN }}
           GH_TOKEN: ${{ secrets.GITEATOKEN }}
         run: |
-          gh release create "${{ github.ref_name }}" \
-            --title "${{ env.PRODUCT_NAME }} ${{ env.VERSION }}" \
-            --notes "Automated release\nVersion: ${{ env.VERSION }}\nBundle ID: ${{ env.BUNDLE_ID }}\nDownload IPA from Dropbox: ${{ env.SHAREABLE_LINK }}"
+          TAG_NAME="v${VERSION}"
+          gh release create "$TAG_NAME" \
+            --title "${PRODUCT_NAME} ${VERSION}" \
+            --notes "Automated release\nVersion: ${VERSION}\nBundle ID: ${BUNDLE_ID}\nDownload IPA from Dropbox: ${SHAREABLE_LINK}"
