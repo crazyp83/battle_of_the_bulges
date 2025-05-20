@@ -58,8 +58,6 @@ jobs:
           cd renpy/renpy-8.3.7-sdk
           ./renpy.sh launcher ios_create "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/ios"
           ./renpy.sh launcher ios_populate "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/ios"
-          echo "Contents of $GITHUB_WORKSPACE/ios:"
-          ls -la "$GITHUB_WORKSPACE/ios"
 
       - name: Check if iOS directory exists
         run: |
@@ -79,23 +77,21 @@ jobs:
           SCHEME_NAME="${XCODEPROJ_NAME%.xcodeproj}"
           echo "XCODEPROJ_PATH=$XCODEPROJ" >> $GITHUB_ENV
           echo "SCHEME_NAME=$SCHEME_NAME" >> $GITHUB_ENV
-          echo "Found Xcode project: $XCODEPROJ_NAME with scheme: $SCHEME_NAME"
 
       - name: Build Xcode project without signing
         run: |
           cd "$GITHUB_WORKSPACE/ios"
-          xcodebuild -project "${{ env.XCODEPROJ_PATH }}" -scheme "${{ env.SCHEME_NAME }}" -configuration Release -sdk iphoneos CODE_SIGN_IDENTITY="" PROVISIONING_PROFILE="" | tee build.log
+          xcodebuild -project "${{ env.XCODEPROJ_PATH }}" -scheme "${{ env.SCHEME_NAME }}" -configuration Release -sdk iphoneos CODE_SIGN_IDENTITY="" PROVISIONING_PROFILE="" > build.log 2>&1
           if [ $? -ne 0 ]; then
             echo "Build failed. Check build.log for details."
             cat build.log
             exit 1
           fi
 
-      - name: Debug build settings and locate .app bundle
+      - name: Locate .app bundle and set environment variables
         run: |
           cd "$GITHUB_WORKSPACE/ios"
           BUILD_SETTINGS=$(xcodebuild -project "${{ env.XCODEPROJ_PATH }}" -scheme "${{ env.SCHEME_NAME }}" -configuration Release -sdk iphoneos -showBuildSettings)
-          echo "$BUILD_SETTINGS"
           BUILT_PRODUCTS_DIR=$(echo "$BUILD_SETTINGS" | grep -E '^\s*BUILT_PRODUCTS_DIR' | cut -d '=' -f2 | xargs)
           FULL_PRODUCT_NAME=$(echo "$BUILD_SETTINGS" | grep -E '^\s*FULL_PRODUCT_NAME' | cut -d '=' -f2 | xargs)
           PRODUCT_NAME=$(echo "$BUILD_SETTINGS" | grep -E '^\s*PRODUCT_NAME' | cut -d '=' -f2 | xargs)
@@ -116,14 +112,9 @@ jobs:
           fi
           if [ -z "$BUNDLE_ID" ]; then
             echo "Warning: PRODUCT_BUNDLE_IDENTIFIER not found"
-          else
-            echo "Bundle ID: $BUNDLE_ID"
           fi
-          if [ -d "$APP_PATH" ]; then
-            echo ".app bundle found at $APP_PATH"
-          else
+          if [ ! -d "$APP_PATH" ]; then
             echo "Error: .app bundle not found at $APP_PATH"
-            ls -la "$BUILT_PRODUCTS_DIR" || echo "Directory not found"
             exit 1
           fi
 
