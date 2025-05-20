@@ -57,4 +57,4 @@ Distribution: This game may be distributed freely, provided it is not modified a
 
 Thank you for playing “Battle of the Bulges”! Enjoy your adventure on the island of Veri-Bosti.
 
-This README should provide everything you need to get started with the game. Have fun!
+This README should provide everything you need to get started with the game. Have fun! 

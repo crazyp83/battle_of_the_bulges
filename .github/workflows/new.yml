@@ -55,10 +55,9 @@ jobs:
 
       - name: Find Ren'Py project directory
         run: |
-          # Find the directory containing the 'game' subdirectory, typical of Ren'Py projects
-          PROJECT_DIR=$(find "$GITHUB_WORKSPACE" -type d -name "game" | head -n 1 | xargs -n 1 dirname)
+          PROJECT_DIR=$(find "$GITHUB_WORKSPACE" -type d -name "game" -not -path "$GITHUB_WORKSPACE/renpy/*" | head -n 1 | xargs -n 1 dirname)
           if [ -z "$PROJECT_DIR" ]; then
-            echo "Error: No Ren'Py project found (no 'game' directory detected in repository)"
+            echo "Error: No Ren'Py project found (no 'game' directory detected in repository outside of renpy directory)"
             exit 1
           fi
           echo "Found Ren'Py project at: $PROJECT_DIR"
